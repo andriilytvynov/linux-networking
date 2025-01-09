@@ -1,0 +1,104 @@
+# This will create four nodes that connected sequentially. Entry points of the
+# containers represent what routing adjustments should be made in each node to
+# enshure bilateral communication.
+#
+# Verify the routing by running traceroute from n1 to n4:
+# root@n1:/# traceroute 3.3.3.2 -n
+# traceroute to 3.3.3.2 (3.3.3.2), 30 hops max, 60 byte packets
+#  1  1.1.1.2  0.417 ms  0.035 ms  0.059 ms
+#  2  2.2.2.2  0.157 ms  0.078 ms  0.064 ms
+#  3  3.3.3.2  0.181 ms  0.070 ms  0.096 ms
+#
+#╭────╮.1            .2╭────╮.1            .2╭────╮.1            .2╭────╮
+#│ n1 │---1.1.1.0/24---│ n2 │---2.2.2.0/24---│ n1 │---3.3.3.0/24---│ n2 │
+#╰────╯                ╰────╯                ╰────╯                ╰────╯
+#
+services:
+  n1:
+    image: linux-node
+    container_name: n1
+    privileged: true
+    networks:
+      net1:
+        ipv4_address: 1.1.1.1
+    entrypoint: >-
+      bash -c '
+        hostname n1 &&
+        echo 1 > /proc/sys/net/ipv4/ip_forward &&
+        ip route del default &&
+        ip route add 2.2.2.0/24 via 1.1.1.2 &&
+        ip route add 3.3.3.0/24 via 1.1.1.2 &&
+        tail -f /dev/null
+      '
+  n2:
+    image: linux-node
+    container_name: n2
+    privileged: true
+    networks:
+      net1:
+        ipv4_address: 1.1.1.2
+      net2:
+        ipv4_address: 2.2.2.1
+    entrypoint: >-
+      bash -c '
+        hostname n2 &&
+        echo 1 > /proc/sys/net/ipv4/ip_forward &&
+        ip route del default &&
+        ip route add 3.3.3.0/24 via 2.2.2.2 &&
+        tail -f /dev/null
+      '
+  n3:
+    image: linux-node
+    container_name: n3
+    privileged: true
+    networks:
+      net2:
+        ipv4_address: 2.2.2.2
+      net3:
+        ipv4_address: 3.3.3.1
+    entrypoint: >-
+      bash -c '
+        hostname n3 &&
+        echo 1 > /proc/sys/net/ipv4/ip_forward &&
+        ip route del default &&
+        ip route add 1.1.1.0/24 via 2.2.2.1 &&
+        tail -f /dev/null
+      '
+  n4:
+    image: linux-node
+    container_name: n4
+    privileged: true
+    networks:
+      net3:
+        ipv4_address: 3.3.3.2
+    entrypoint: >-
+      bash -c '
+        hostname n4 &&
+        echo 1 > /proc/sys/net/ipv4/ip_forward &&
+        ip route del default &&
+        ip route add 1.1.1.0/24 via 3.3.3.1 &&
+        ip route add 2.2.2.0/24 via 3.3.3.1 &&
+        tail -f /dev/null
+      '
+networks:
+  net1:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 1.1.1.0/24
+          gateway: 1.1.1.254
+  net2:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 2.2.2.0/24
+          gateway: 2.2.2.254
+  net3:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 3.3.3.0/24
+          gateway: 3.3.3.254
