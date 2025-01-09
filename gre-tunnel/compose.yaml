@@ -28,6 +28,10 @@
 # traffic is not passing through, i.e no proper route back to the source:
 # root@n1:/# tcpdump -i eth0 icmp
 #
+# Note
+# You can use `mode ipip` instead of `mode gre` to encapsulate traffic using
+# IP-in-IP tunneling.
+#
 services:
   n1:
     image: linux-node
