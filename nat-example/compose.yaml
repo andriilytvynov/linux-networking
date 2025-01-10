@@ -1,0 +1,157 @@
+#
+# ╭────╮.1                 .2
+# │ i1 ├─── 172.1.0.0/24 ───╮  
+# ╰────╯                 ╭──┴──╮.1            .2╭────╮.1            .2╭────╮
+#                        │ nat ├── 2.2.2.0/24 ──┤ r1 ├── 3.3.3.0/24 ──┤ r2 │
+# ╭────╮                 ╰──┬──╯                ╰────╯                ╰────╯
+# │ i2 ├─── 172.2.0.0/24 ───╯  
+# ╰────╯.1                 .2
+#
+# Note:
+# Because of the Docker nature, ip_forwarding enabled on the Docker host and
+# could not be disabled in specific container. That is why no iptable rules to
+# FORWARD section added on nat. If you add a static route from r1 to i1 via nat,
+# it will work because of this issue. We will simulate NAT behavior by avoiding
+# any static rules to 172.1. and 172.2. networks.
+#
+# To verify that NAT is actually working, you do ping from i1 to r2 and on the
+# r2, using tcpdump inspect ICMP source addres, it should be 2.2.2.1, not i1's
+#
+# root@i1:/# ping 3.3.3.2
+# PING 3.3.3.2 (3.3.3.2) 56(84) bytes of data.
+# 64 bytes from 3.3.3.2: icmp_seq=1 ttl=62 time=0.303 ms
+#
+# root@r2:/# tcpdump -i eth0 icmp
+# ...
+# 04:31:13.182276 IP 2.2.2.1 > b05eb31a20d7: ICMP echo request, id 65, seq 13, length 64
+#
+# However, if you do ping from i1 to i2, the source address will be i1's
+#
+# root@i1:/# ping 172.2.0.1
+# PING 172.2.0.1 (172.2.0.1) 56(84) bytes of data.
+# 64 bytes from 172.2.0.1: icmp_seq=1 ttl=63 time=0.169 ms
+#
+# root@i2:/# tcpdump -i eth0 icmp
+# ...
+# 04:33:19.011548 IP 172-1-0-1.lightspeed.hstntx.sbcglobal.net > 8905936b5f75: ICMP echo request, id 68, seq 1, length 64
+#
+services:
+  # Internal
+  i1:
+    image: linux-node
+    container_name: i1
+    privileged: true
+    networks:
+      internal1:
+        ipv4_address: 172.1.0.1
+    entrypoint: >-
+      bash -c '
+        hostname i1 &&
+        echo 1 > /proc/sys/net/ipv4/ip_forward &&
+        ip route del default &&
+        ip route add default via 172.1.0.2 &&
+        tail -f /dev/null
+      '
+  i2:
+    image: linux-node
+    container_name: i2
+    privileged: true
+    networks:
+      internal2:
+        ipv4_address: 172.2.0.1
+    entrypoint: >-
+      bash -c '
+        hostname i2 &&
+        echo 1 > /proc/sys/net/ipv4/ip_forward &&
+        ip route del default &&
+        ip route add default via 172.2.0.2 &&
+        tail -f /dev/null
+      '
+  
+  # NAT
+  nat:
+    image: linux-node
+    container_name: nat
+    privileged: true
+    networks:
+      internal1:
+        ipv4_address: 172.1.0.2
+      internal2:
+        ipv4_address: 172.2.0.2
+      external1:
+        ipv4_address: 2.2.2.1
+    entrypoint: >-
+      bash -c "
+        hostname nat &&
+        echo 1 > /proc/sys/net/ipv4/ip_forward &&
+        ip route del default &&
+        ip route add 3.3.3.0/24 via 2.2.2.2 &&
+
+        iptables -t nat -A POSTROUTING -o $(ip -o -4 addr show | grep 2.2.2.1 | awk '{print $2}') -j MASQUERADE &&
+
+        tail -f /dev/null
+      "
+  
+  # External
+  r1:
+    image: linux-node
+    container_name: r1
+    privileged: true
+    networks:
+      external1:
+        ipv4_address: 2.2.2.2
+      external2:
+        ipv4_address: 3.3.3.1
+    entrypoint: >-
+      bash -c '
+        hostname r1 &&
+        echo 1 > /proc/sys/net/ipv4/ip_forward &&
+        ip route del default &&
+        tail -f /dev/null
+      '
+
+  # External
+  r2:
+    image: linux-node
+    container_name: r2
+    privileged: true
+    networks:
+      external2:
+        ipv4_address: 3.3.3.2
+    entrypoint: >-
+      bash -c '
+        hostname r2 &&
+        echo 1 > /proc/sys/net/ipv4/ip_forward &&
+        ip route del default &&
+        ip route add 2.2.2.0/24 via 3.3.3.1 &&
+        tail -f /dev/null
+      '
+networks:
+  internal1:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.1.0.0/24
+          gateway: 172.1.0.254
+  internal2:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.2.0.0/24
+          gateway: 172.2.0.254
+  external1:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 2.2.2.0/24
+          gateway: 2.2.2.254
+  external2:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 3.3.3.0/24
+          gateway: 3.3.3.254
